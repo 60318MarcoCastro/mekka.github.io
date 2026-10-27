@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MEKKA | Compra</title>
+  <link rel="stylesheet" href="css/styles.css">
+  <script src="js/script.js"></script>
+</head>
+<body>
+
+  <header class="header">
+    <a href="menu.html" class="logo">MEK<span>KA</span></a>
+    <button class="theme-toggle" id="theme-toggle" type="button">
+      <span class="icon">🌙</span>
+      <span class="label">Modo oscuro</span>
+    </button>
+  </header>
+
+  <main class="main">
+    <a href="menu.html" class="back-link">← Volver al menú principal</a>
+
+    <h1 class="page-title">Compra</h1>
+    <p class="page-subtitle">Gestión de compras a proveedores</p>
+
+    <div class="menu-grid">
+      <button class="menu-btn" type="button" data-pending="Realizar Compra">
+        <span class="menu-icon">🛍️</span>
+        Realizar Compra
+      </button>
+      <button class="menu-btn" type="button" data-pending="Buscar Compra">
+        <span class="menu-icon">🔍</span>
+        Buscar Compra
+      </button>
+      <button class="menu-btn" type="button" data-pending="Cancelar Compra">
+        <span class="menu-icon">❌</span>
+        Cancelar Compra
+      </button>
+      <button class="menu-btn" type="button" data-pending="Devolución de Compra">
+        <span class="menu-icon">↩️</span>
+        Devolución de Compra
+      </button>
+    </div>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <footer class="footer">© 2026 MEKKA Taller Mecánico</footer>
+
+</body>
+</html>
