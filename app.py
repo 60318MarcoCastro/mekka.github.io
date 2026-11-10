@@ -1,19 +1,25 @@
+import os
+
 from flask import Flask, render_template, request, redirect, url_for, flash
 import mysql.connector
 
 app = Flask(__name__)
-app.secret_key = 'clave_secreta_taller'
+app.secret_key = os.environ.get('SECRET_KEY', 'clave_secreta_taller')
 
-# Configuración de conexión a la Base de Datos (Wampserver)
+# Configuración de conexión a la Base de Datos.
+# En tu PC usa los valores de Wampserver; en el servidor (PythonAnywhere)
+# se toman de las variables de entorno definidas en el archivo WSGI.
+DB_CONFIG = {
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'database': os.environ.get('DB_NAME', 'gestion_taller'),
+    'port': int(os.environ.get('DB_PORT', '3306')),
+}
+
+
 def get_db_connection():
-    connection = mysql.connector.connect(
-        host='localhost',
-        user='root',
-        password='', # Si tienes contraseña en Wampserver, colócala aquí
-        database='gestion_taller',
-        port=3306
-    )
-    return connection
+    return mysql.connector.connect(**DB_CONFIG)
 
 # --- 1. RUTA PRINCIPAL ---
 @app.route('/')
