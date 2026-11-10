@@ -1,8 +1,10 @@
-"""Crea las tablas de la base de datos a partir de gestion_taller.sql.
+"""Crea las tablas y carga los datos de gestion_taller.sql (ejecutar una sola vez).
 
 Uso:  python init_db.py
-Usa la misma configuración que app.py (variables de entorno o Wampserver).
+Usa la misma configuración que app.py (variables de entorno o Wampserver)
+y pide la contraseña del usuario admin (o la toma de ADMIN_PASSWORD).
 """
+import getpass
 import os
 
 import mysql.connector
@@ -38,6 +40,15 @@ def main():
         if statement:
             cursor.execute(statement)
     conn.commit()
+
+    # Contraseña del administrador: se pide aquí para que nunca esté en GitHub.
+    password = os.environ.get('ADMIN_PASSWORD') or getpass.getpass(
+        'Escribe la contraseña para el usuario admin (no se mostrará): ')
+    while not password.strip():
+        password = getpass.getpass('La contraseña no puede estar vacía. Escríbela de nuevo: ')
+    cursor.execute("UPDATE usuarios SET password = %s WHERE usuario = 'admin'", (password,))
+    conn.commit()
+    print("Contraseña del usuario admin guardada.")
 
     cursor.execute("SHOW TABLES")
     print("Tablas en", database + ":", ", ".join(t[0] for t in cursor.fetchall()))

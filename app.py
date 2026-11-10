@@ -1,6 +1,6 @@
 import os
 
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 import mysql.connector
 
 app = Flask(__name__)
@@ -21,6 +21,67 @@ DB_CONFIG = {
 def get_db_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
+
+def ejecutar(sql, params=(), mensaje_error='No se pudo completar la operación.'):
+    """Ejecuta una instrucción de escritura (INSERT/UPDATE/DELETE).
+    Si MySQL la rechaza (dato duplicado o registro en uso), muestra un aviso
+    en la página en lugar de un error."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql, params)
+        conn.commit()
+        return True
+    except mysql.connector.IntegrityError:
+        conn.rollback()
+        flash(mensaje_error, 'error')
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def consultar(sql, params=(), uno=False):
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute(sql, params)
+    resultado = cursor.fetchone() if uno else cursor.fetchall()
+    cursor.close()
+    conn.close()
+    return resultado
+
+
+# --- 0. INICIO DE SESIÓN (tabla usuarios) ---
+@app.before_request
+def requiere_login():
+    if request.endpoint in ('login', 'static'):
+        return None
+    if 'usuario' not in session:
+        return redirect(url_for('login'))
+    return None
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        usuario = consultar(
+            "SELECT usuario FROM usuarios WHERE usuario = %s AND password = %s AND password <> ''",
+            (request.form['usuario'], request.form['password']),
+            uno=True,
+        )
+        if usuario:
+            session['usuario'] = usuario['usuario']
+            return redirect(url_for('index'))
+        flash('Usuario o contraseña incorrectos.', 'error')
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+
 # --- 1. RUTA PRINCIPAL ---
 @app.route('/')
 def index():
@@ -30,231 +91,183 @@ def index():
 # --- 2. MÓDULO DE CLIENTES ---
 @app.route('/clientes', methods=['GET', 'POST'])
 def clientes():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     if request.method == 'POST':
         campos = ['curp', 'nombre', 'apellidos', 'direccion', 'telefono']
-        valores = tuple(request.form[c] for c in campos)
-
-        cursor.execute(
-            "INSERT INTO clientes (curp, nombre, apellidos, direccion, telefono) VALUES (%s, %s, %s, %s, %s)",
-            valores
+        valores = tuple(request.form[c].strip() for c in campos)
+        ejecutar(
+            "INSERT INTO cliente (curp, nombre, apellidos, direccion, telefono) VALUES (%s, %s, %s, %s, %s)",
+            valores,
+            'Ya existe un cliente con esa CURP.',
         )
-        conn.commit()
         return redirect(url_for('clientes'))
 
-    cursor.execute("SELECT * FROM clientes")
-    lista_clientes = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
+    lista_clientes = consultar("SELECT * FROM cliente ORDER BY id_cliente")
     return render_template('clientes.html', clientes=lista_clientes)
 
 
 @app.route('/eliminar_cliente/<string:curp>')
 def eliminar_cliente(curp):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM clientes WHERE curp = %s", (curp,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    ejecutar(
+        "DELETE FROM cliente WHERE curp = %s",
+        (curp,),
+        'No se puede eliminar el cliente porque tiene vehículos registrados. Elimina primero sus vehículos.',
+    )
     return redirect(url_for('clientes'))
 
 
 # --- 3. MÓDULO DE VEHÍCULOS ---
 @app.route('/vehiculos', methods=['GET', 'POST'])
 def vehiculos():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     if request.method == 'POST':
-        campos = ['placas', 'modelo', 'color', 'curp_cliente']
-        valores = tuple(request.form[c] for c in campos)
-
-        cursor.execute(
-            "INSERT INTO vehiculos (placas, modelo, color, curp_cliente) VALUES (%s, %s, %s, %s)",
-            valores
-        )
-        conn.commit()
+        placas = request.form['placas'].strip().upper()
+        cliente = consultar("SELECT id_cliente FROM cliente WHERE curp = %s",
+                            (request.form['curp_cliente'],), uno=True)
+        if not cliente:
+            flash('El cliente seleccionado no existe.', 'error')
+        else:
+            ejecutar(
+                """
+                INSERT INTO vehiculo (placas, modelo, color, fecha_entrada, hora_entrada, id_cliente)
+                VALUES (%s, %s, %s, CURDATE(), CURTIME(), %s)
+                """,
+                (placas, request.form['modelo'], request.form['color'], cliente['id_cliente']),
+                'Ya existe un vehículo con esas placas.',
+            )
         return redirect(url_for('vehiculos'))
 
-    cursor.execute("""
+    lista_vehiculos = consultar("""
         SELECT v.*, c.nombre, c.apellidos
-        FROM vehiculos v
-        JOIN clientes c ON v.curp_cliente = c.curp
+        FROM vehiculo v
+        JOIN cliente c ON v.id_cliente = c.id_cliente
+        ORDER BY v.id_vehiculo
     """)
-    lista_vehiculos = cursor.fetchall()
-
-    cursor.execute("SELECT curp, nombre, apellidos FROM clientes")
-    lista_clientes = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
+    lista_clientes = consultar("SELECT curp, nombre, apellidos FROM cliente ORDER BY nombre")
     return render_template('vehiculos.html', vehiculos=lista_vehiculos, clientes=lista_clientes)
 
 
 @app.route('/eliminar_vehiculo/<string:placas>')
 def eliminar_vehiculo(placas):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM vehiculos WHERE placas = %s", (placas,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    ejecutar(
+        "DELETE FROM vehiculo WHERE placas = %s",
+        (placas,),
+        'No se puede eliminar el vehículo porque tiene reparaciones registradas.',
+    )
     return redirect(url_for('vehiculos'))
-
 
 
 # --- 4. MÓDULO DE MECÁNICOS ---
 @app.route('/mecanicos', methods=['GET', 'POST'])
 def mecanicos():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     if request.method == 'POST':
         campos = ['nombre', 'apellidos', 'telefono']
-        valores = tuple(request.form[c] for c in campos)
-
-        cursor.execute(
-            "INSERT INTO mecanicos (nombre, apellidos, telefono) VALUES (%s, %s, %s)",
-            valores
+        ejecutar(
+            "INSERT INTO mecanico (nombre, apellidos, telefono) VALUES (%s, %s, %s)",
+            tuple(request.form[c] for c in campos),
         )
-        conn.commit()
         return redirect(url_for('mecanicos'))
 
-    cursor.execute("SELECT * FROM mecanicos")
-    lista_mecanicos = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
+    lista_mecanicos = consultar("SELECT * FROM mecanico ORDER BY id_mecanico")
     return render_template('mecanicos.html', mecanicos=lista_mecanicos)
 
 
 @app.route('/eliminar_mecanico/<int:id_mecanico>')
 def eliminar_mecanico(id_mecanico):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM mecanicos WHERE id_mecanico = %s", (id_mecanico,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    ejecutar(
+        "DELETE FROM mecanico WHERE id_mecanico = %s",
+        (id_mecanico,),
+        'No se puede eliminar el mecánico porque está asignado a una o más reparaciones.',
+    )
     return redirect(url_for('mecanicos'))
 
 
 # --- 5. MÓDULO DE REFACCIONES ---
 @app.route('/refacciones', methods=['GET', 'POST'])
 def refacciones():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     if request.method == 'POST':
-        campos = ['nombre', 'descripcion', 'precio_unitario']
-        valores = tuple(request.form[c] for c in campos)
-
-        cursor.execute(
-            "INSERT INTO refacciones (nombre, descripcion, precio_unitario) VALUES (%s, %s, %s)",
-            valores
+        ejecutar(
+            "INSERT INTO refaccion (nombre, precio_unitario) VALUES (%s, %s)",
+            (request.form['nombre'], request.form['precio_unitario']),
         )
-        conn.commit()
         return redirect(url_for('refacciones'))
 
-    cursor.execute("SELECT * FROM refacciones")
-    lista_refacciones = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
-
+    lista_refacciones = consultar("SELECT * FROM refaccion ORDER BY id_refaccion")
     return render_template('refacciones.html', refacciones=lista_refacciones)
 
 
 @app.route('/eliminar_refaccion/<int:id_refaccion>')
 def eliminar_refaccion(id_refaccion):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM refacciones WHERE id_refaccion = %s", (id_refaccion,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    ejecutar(
+        "DELETE FROM refaccion WHERE id_refaccion = %s",
+        (id_refaccion,),
+        'No se puede eliminar la refacción porque ya se usó en una reparación.',
+    )
     return redirect(url_for('refacciones'))
 
 
 # --- 6. MÓDULO DE REPARACIONES ---
 @app.route('/reparaciones', methods=['GET', 'POST'])
 def reparaciones():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
     if request.method == 'POST':
-        campos = ['placas_vehiculo', 'id_mecanico_asignado', 'precio_mano_obra']
-        placas, id_mecanico, precio_mano_obra = (request.form[c] for c in campos)
-
-        cursor.execute(
-            """
-            INSERT INTO reparaciones 
-            (placas_vehiculo, id_mecanico_asignado, fecha_entrada, hora_entrada, precio_mano_obra)
-            VALUES (%s, %s, CURDATE(), CURTIME(), %s)
-            """,
-            (placas, id_mecanico, precio_mano_obra)
-        )
-        conn.commit()
+        vehiculo = consultar("SELECT id_vehiculo FROM vehiculo WHERE placas = %s",
+                             (request.form['placas_vehiculo'],), uno=True)
+        if not vehiculo:
+            flash('El vehículo seleccionado no existe.', 'error')
+        else:
+            ejecutar(
+                """
+                INSERT INTO reparacion (id_vehiculo, id_mecanico_principal, fecha_inicio, mano_obra)
+                VALUES (%s, %s, CURDATE(), %s)
+                """,
+                (vehiculo['id_vehiculo'], request.form['id_mecanico_asignado'],
+                 request.form['precio_mano_obra']),
+                'No se pudo registrar la reparación (revisa el vehículo y el mecánico).',
+            )
         return redirect(url_for('reparaciones'))
 
-    cursor.execute("""
-        SELECT 
-            r.*, 
-            m.nombre AS nombre_mecanico, 
+    lista_reparaciones = consultar("""
+        SELECT
+            r.id_reparacion, r.fecha_inicio, r.fecha_fin,
+            r.mano_obra AS precio_mano_obra,
+            v.placas AS placas_vehiculo, v.modelo,
+            m.nombre AS nombre_mecanico,
             m.apellidos AS apellidos_mecanico,
             IFNULL(
                 GROUP_CONCAT(DISTINCT CONCAT(m_ayuda.nombre, ' ', m_ayuda.apellidos) SEPARATOR ', '),
                 'Sin ayudantes'
             ) AS ayudantes
-        FROM reparaciones r 
-        JOIN mecanicos m ON r.id_mecanico_asignado = m.id_mecanico
-        LEFT JOIN equipo_reparacion eq ON r.id_reparacion = eq.id_reparacion
-        LEFT JOIN mecanicos m_ayuda ON eq.id_mecanico = m_ayuda.id_mecanico
-        GROUP BY r.id_reparacion
+        FROM reparacion r
+        JOIN vehiculo v ON r.id_vehiculo = v.id_vehiculo
+        JOIN mecanico m ON r.id_mecanico_principal = m.id_mecanico
+        LEFT JOIN mecanico_reparacion eq ON r.id_reparacion = eq.id_reparacion
+        LEFT JOIN mecanico m_ayuda ON eq.id_mecanico = m_ayuda.id_mecanico
+        GROUP BY r.id_reparacion, r.fecha_inicio, r.fecha_fin, r.mano_obra,
+                 v.placas, v.modelo, m.nombre, m.apellidos
+        ORDER BY r.id_reparacion
     """)
-    lista_reparaciones = cursor.fetchall()
-
-    cursor.execute("SELECT placas, modelo FROM vehiculos")
-    lista_vehiculos = cursor.fetchall()
-
-    cursor.execute("SELECT id_mecanico, nombre, apellidos FROM mecanicos")
-    lista_mecanicos = cursor.fetchall()
-
-    cursor.execute("SELECT * FROM refacciones")
-    lista_refacciones = cursor.fetchall()
-
-    cursor.close()
-    conn.close()
 
     return render_template(
         'reparaciones.html',
         reparaciones=lista_reparaciones,
-        vehiculos=lista_vehiculos,
-        mecanicos=lista_mecanicos,
-        refacciones=lista_refacciones
+        vehiculos=consultar("SELECT placas, modelo FROM vehiculo ORDER BY placas"),
+        mecanicos=consultar("SELECT id_mecanico, nombre, apellidos FROM mecanico ORDER BY nombre"),
+        refacciones=consultar("SELECT * FROM refaccion ORDER BY nombre"),
     )
+
+
+@app.route('/terminar_reparacion/<int:id_reparacion>')
+def terminar_reparacion(id_reparacion):
+    ejecutar("UPDATE reparacion SET fecha_fin = CURDATE() WHERE id_reparacion = %s AND fecha_fin IS NULL",
+             (id_reparacion,))
+    return redirect(url_for('reparaciones'))
 
 
 # --- 7. ASIGNAR MECÁNICO DE APOYO (EQUIPO) ---
 @app.route('/agregar_mecanico_equipo', methods=['POST'])
 def agregar_mecanico_equipo():
-    id_reparacion = request.form['id_reparacion']
-    id_mecanico = request.form['id_mecanico_ayudante']
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    sql = "INSERT IGNORE INTO equipo_reparacion (id_reparacion, id_mecanico) VALUES (%s, %s)"
-    cursor.execute(sql, (id_reparacion, id_mecanico))
-    conn.commit()
-    cursor.close()
-    conn.close()
-
+    ejecutar(
+        "INSERT IGNORE INTO mecanico_reparacion (id_reparacion, id_mecanico) VALUES (%s, %s)",
+        (request.form['id_reparacion'], request.form['id_mecanico_ayudante']),
+    )
     return redirect(url_for('reparaciones'))
 
 
@@ -265,88 +278,87 @@ def agregar_refaccion_reparacion():
     id_refaccion = request.form['id_refaccion']
     cantidad = int(request.form['cantidad'])
 
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    cursor.execute("SELECT precio_unitario FROM refacciones WHERE id_refaccion = %s", (id_refaccion,))
-    refaccion = cursor.fetchone()
-
+    refaccion = consultar("SELECT precio_unitario FROM refaccion WHERE id_refaccion = %s",
+                          (id_refaccion,), uno=True)
     if refaccion:
-        precio_unitario = refaccion['precio_unitario']
-
-        sql = """
-            INSERT INTO detalle_refacciones_reparacion (id_reparacion, id_refaccion, cantidad, precio_unitario)
+        ejecutar(
+            """
+            INSERT INTO refaccion_reparacion (id_reparacion, id_refaccion, cantidad, precio_unitario)
             VALUES (%s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE cantidad = cantidad + VALUES(cantidad)
-        """
-        cursor.execute(sql, (id_reparacion, id_refaccion, cantidad, precio_unitario))
-        conn.commit()
-
-    cursor.close()
-    conn.close()
-
+            """,
+            (id_reparacion, id_refaccion, cantidad, refaccion['precio_unitario']),
+        )
     return redirect(url_for('reparaciones'))
 
 
 @app.route('/eliminar_reparacion/<int:id_reparacion>')
 def eliminar_reparacion(id_reparacion):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM reparaciones WHERE id_reparacion = %s", (id_reparacion,))
-    conn.commit()
-    cursor.close()
-    conn.close()
+    # Las facturas no se borran en cascada, así que se eliminan primero.
+    ejecutar("DELETE FROM factura WHERE id_reparacion = %s", (id_reparacion,))
+    ejecutar("DELETE FROM reparacion WHERE id_reparacion = %s", (id_reparacion,))
     return redirect(url_for('reparaciones'))
 
 
 # --- 9. GENERAR Y MOSTRAR FACTURA DETALLADA ---
 @app.route('/factura/<int:id_reparacion>')
 def generar_factura(id_reparacion):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    # Datos principales de la reparación, cliente, vehículo y mecánico
-    cursor.execute("""
-        SELECT 
-            r.id_reparacion, r.precio_mano_obra,
-            c.curp, c.nombre AS cliente_nombre, c.apellidos AS cliente_apellidos, 
+    factura_data = consultar("""
+        SELECT
+            r.id_reparacion, r.mano_obra AS precio_mano_obra, r.fecha_inicio, r.fecha_fin,
+            c.curp, c.nombre AS cliente_nombre, c.apellidos AS cliente_apellidos,
             c.direccion, c.telefono,
             v.placas, v.modelo, v.color,
             m.nombre AS mecanico_nombre, m.apellidos AS mecanico_apellidos
-        FROM reparaciones r
-        JOIN vehiculos v ON r.placas_vehiculo = v.placas
-        JOIN clientes c ON v.curp_cliente = c.curp
-        JOIN mecanicos m ON r.id_mecanico_asignado = m.id_mecanico
+        FROM reparacion r
+        JOIN vehiculo v ON r.id_vehiculo = v.id_vehiculo
+        JOIN cliente c ON v.id_cliente = c.id_cliente
+        JOIN mecanico m ON r.id_mecanico_principal = m.id_mecanico
         WHERE r.id_reparacion = %s
-    """, (id_reparacion,))
-    factura_data = cursor.fetchone()
+    """, (id_reparacion,), uno=True)
 
-    # Refacciones utilizadas
-    cursor.execute("""
-        SELECT 
-            ref.nombre AS nombre_refaccion, 
-            d.cantidad, 
-            d.precio_unitario
-        FROM detalle_refacciones_reparacion d
-        JOIN refacciones ref ON d.id_refaccion = ref.id_refaccion
+    if not factura_data:
+        flash('La reparación no existe.', 'error')
+        return redirect(url_for('reparaciones'))
+
+    detalles = consultar("""
+        SELECT ref.nombre AS nombre_refaccion, d.cantidad, d.precio_unitario
+        FROM refaccion_reparacion d
+        JOIN refaccion ref ON d.id_refaccion = ref.id_refaccion
         WHERE d.id_reparacion = %s
     """, (id_reparacion,))
-    detalles = cursor.fetchall()
 
     # Cálculos de totales
-    total_refacciones = sum(d['cantidad'] * d['precio_unitario'] for d in detalles)
-    subtotal = float(factura_data['precio_mano_obra']) + float(total_refacciones)
-    iva = subtotal * 0.16
-    total = subtotal + iva
+    total_refacciones = sum(float(d['cantidad'] * d['precio_unitario']) for d in detalles)
+    subtotal = round(float(factura_data['precio_mano_obra']) + total_refacciones, 2)
+    iva = round(subtotal * 0.16, 2)
+    total = round(subtotal + iva, 2)
+
+    # Guarda (o actualiza) la factura en la tabla factura
+    existente = consultar("SELECT id_factura FROM factura WHERE id_reparacion = %s",
+                          (id_reparacion,), uno=True)
+    if existente:
+        id_factura = existente['id_factura']
+        ejecutar("UPDATE factura SET subtotal = %s, iva = %s, total = %s WHERE id_factura = %s",
+                 (subtotal, iva, total, id_factura))
+    else:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO factura (id_reparacion, subtotal, iva, total) VALUES (%s, %s, %s, %s)",
+            (id_reparacion, subtotal, iva, total),
+        )
+        conn.commit()
+        id_factura = cursor.lastrowid
+        cursor.close()
+        conn.close()
 
     factura_data.update({
+        'id_factura': id_factura,
         'subtotal': subtotal,
         'iva': iva,
-        'total': total
+        'total': total,
     })
-
-    cursor.close()
-    conn.close()
 
     return render_template('factura.html', factura=factura_data, detalles=detalles)
 

@@ -3,6 +3,7 @@
 {% block content %}
 <div style="border: 2px solid #2c3e50; padding: 20px; border-radius: 8px;">
     <h2 style="text-align: center;">FACTURA</h2>
+    <p style="text-align: center;"><b>Folio de factura:</b> {{ factura.id_factura }} &nbsp;|&nbsp; <b>Reparación:</b> #{{ factura.id_reparacion }}</p>
     <hr>
     
     <h3>Datos del Cliente</h3>
@@ -15,7 +16,8 @@
 
     <h3>Vehículo y Reparación</h3>
     <p><b>Vehículo:</b> {{ factura.modelo }} (Placas: {{ factura.placas }}) - {{ factura.color }}</p>
-    <p><b>Mecánico Asginado:</b> {{ factura.mecanico_nombre }} {{ factura.mecanico_apellidos }}</p>
+    <p><b>Mecánico Asignado:</b> {{ factura.mecanico_nombre }} {{ factura.mecanico_apellidos }}</p>
+    <p><b>Fecha de inicio:</b> {{ factura.fecha_inicio }} &nbsp;|&nbsp; <b>Fecha de fin:</b> {{ factura.fecha_fin or 'En proceso' }}</p>
 
     <hr>
 
